@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   const rows = await Promise.all(ids.map((id) => getMediaRow(id)));
   const images = rows.filter(
     (r): r is NonNullable<typeof r> =>
-      r !== null && r.status === "completed" && r.type.startsWith("image") && r.data !== null
+      r !== null && r.status === "completed" && r.type.includes("image") && r.data !== null
   );
 
   if (images.length < 2) {

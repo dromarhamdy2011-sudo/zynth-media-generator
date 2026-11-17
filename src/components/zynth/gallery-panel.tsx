@@ -44,7 +44,7 @@ function MediaCard({ media }: { media: PublicMedia }) {
   return (
     <Card className="overflow-hidden group">
       <div className="relative aspect-square bg-black/40">
-        {media.status === "completed" && media.type.startsWith("image") && media.url && (
+        {media.status === "completed" && media.type.includes("image") && media.url && (
           <img
             src={media.url}
             alt={media.prompt ?? "صورة مولّدة"}

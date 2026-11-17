@@ -13,7 +13,7 @@ export function MergePanel() {
   const { media, selectedIds, clearSelection, refresh } = useZynthStore();
 
   const selected = media.filter((m) => selectedIds.includes(m.id));
-  const images = selected.filter((m) => m.type.startsWith("image") && m.status === "completed");
+  const images = selected.filter((m) => m.type.includes("image") && m.status === "completed");
   const videos = selected.filter((m) => m.type.includes("video") && m.status === "completed");
 
   const [imgMerging, setImgMerging] = useState(false);
