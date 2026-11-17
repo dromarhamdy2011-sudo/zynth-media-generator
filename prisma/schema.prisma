@@ -1,0 +1,52 @@
+// Zynth AI — Prisma schema
+// SQLite / libSQL (Turso) compatible.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// حالة الوسيط: processing | completed | failed
+// النوع: image | video | merged_image | merged_video
+model Media {
+  id            String        @id @default(cuid())
+  type          String
+  title         String?
+  prompt        String?
+  provider      String?
+  providerJobId String?
+  status        String        @default("processing")
+  mimeType      String?
+  size          Int?
+  data          Bytes?
+  sourceUrl     String?
+  meta          String?
+  error         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  publications  Publication[]
+
+  @@index([type, status])
+  @@index([createdAt])
+}
+
+// حالة النشر: scheduled | failed
+model Publication {
+  id          String    @id @default(cuid())
+  mediaId     String
+  media       Media     @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  networks    String
+  caption     String?
+  status      String    @default("scheduled")
+  scheduledAt DateTime?
+  timezone    String?
+  providerRef String?
+  response    String?
+  createdAt   DateTime  @default(now())
+
+  @@index([mediaId])
+}
