@@ -11,7 +11,7 @@ const BG = "#0a0a12";
 const FFMPEG_TIMEOUT_MS = 240_000;
 
 /** شبكة كولاج من صور (sharp) — تُستخدم لميزة "الدمج" */
-export async function collageImages(buffers: Buffer[]): Promise<Buffer> {
+export async function collageImages(buffers: Uint8Array[]): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
   if (buffers.length === 0) throw new Error("لا توجد صور للدمج");
   if (buffers.length > 9) throw new Error("الحد الأقصى 9 وسائط للدمج في المرة");
@@ -67,7 +67,7 @@ async function resolveFfmpeg(): Promise<string> {
 }
 
 /** دمج مقاطع فيديو في ملف واحد (ffmpeg concat) */
-export async function concatVideos(buffers: Buffer[]): Promise<Buffer> {
+export async function concatVideos(buffers: Uint8Array[]): Promise<Buffer> {
   if (buffers.length < 2) throw new Error("يلزم مقطعان على الأقل لدمج الفيديو");
   if (buffers.length > 6) throw new Error("الحد الأقصى 6 مقاطع للدمج في المرة");
 

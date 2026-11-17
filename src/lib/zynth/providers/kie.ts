@@ -1,148 +1,192 @@
 /**
- * عميل kie.ai الموحد (Jobs API)
- * التوثيق: https://docs.kie.ai
- * - إنشاء مهمة: POST https://api.kie.ai/api/v1/jobs/createTask
- * - متابعة المهمة: GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=...
- * المصادقة: ترويسة Authorization: Bearer <KIE_API_KEY>
- * حالات المهمة: waiting | queuing | generating | success | fail
+ * عميل kie.ai الموحّد — Jobs API (صور + فيديو)
+ * إنشاء مهمة:  POST https://api.kie.ai/api/v1/jobs/createTask
+ * حالة المهمة: GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=...
+ * المصادقة:    Authorization: Bearer <KIE_API_KEY>
+ *
+ * ملاحظات مهمة:
+ * - الأخطاء تعود بحالة HTTP 200 مع حقل code — يجب فحص code === 200 دائماً.
+ * - حالات المهمة: waiting | queuing | generating | success | fail
+ * - النتيجة داخل حقل resultJson (نص JSON) بصيغة {"resultUrls":["..."]}
  */
 
 import { MAX_STORE_BYTES } from "../config";
 
-const KIE_API_BASE = "https://api.kie.ai/api/v1/jobs";
+const KIE_BASE = "https://api.kie.ai/api/v1/jobs";
 
-export function kieApiKey(): string {
-  const key = process.env.KIE_API_KEY;
-  if (!key) {
-    throw new Error("KIE_API_KEY مفقود. أضفه في متغيرات البيئة (أو في Vercel) ثم أعد المحاولة.");
-  }
-  return key;
+export function isKieConfigured(): boolean {
+  return Boolean(process.env.KIE_API_KEY);
 }
 
-/** إنشاء مهمة توليد وإرجاع taskId */
+interface KieResponse<T> {
+  code: number;
+  msg?: string;
+  data?: T;
+}
+
+interface KieTaskData {
+  taskId?: string;
+}
+
+interface KieRecordData {
+  state?: string;
+  resultJson?: string;
+  failMsg?: string;
+  failCode?: string;
+  progress?: number;
+}
+
+async function kieHeaders(): Promise<Record<string, string>> {
+  const key = process.env.KIE_API_KEY;
+  if (!key) {
+    throw new Error(
+      "KIE_API_KEY مفقود. أضفه في متغيرات البيئة (محلياً في .env أو في Vercel → Environment Variables) ثم أعد المحاولة."
+    );
+  }
+  return { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+}
+
+function requireOk<T>(json: KieResponse<T>): T {
+  if (json.code !== 200 || json.data === undefined) {
+    throw new Error(
+      `kie.ai (code ${json.code}): ${json.msg ?? "خطأ غير معروف"}`
+    );
+  }
+  return json.data;
+}
+
+/** إنشاء مهمة توليد على kie.ai وإرجاع معرّفها (taskId) */
 export async function kieCreateTask(
   model: string,
   input: Record<string, unknown>
 ): Promise<string> {
-  const res = await fetch(`${KIE_API_BASE}/createTask`, {
+  const res = await fetch(`${KIE_BASE}/createTask`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${kieApiKey()}`,
-      "Content-Type": "application/json",
-    },
+    headers: await kieHeaders(),
     body: JSON.stringify({ model, input }),
   });
 
-  const json = (await res.json().catch(() => null)) as
-    | { code?: number; msg?: string; data?: { taskId?: string } }
-    | null;
-
-  if (!res.ok || !json || json.code !== 200 || !json.data?.taskId) {
-    throw new Error(
-      `kie.ai createTask (${res.status}): ${json?.msg ?? "استجابة غير صالحة"}`
-    );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`kie.ai HTTP (${res.status}): ${text.slice(0, 400)}`);
   }
-  return json.data.taskId;
+
+  const json = (await res.json()) as KieResponse<KieTaskData>;
+  const data = requireOk(json);
+  if (!data.taskId) throw new Error("kie.ai لم يُرجع معرّف المهمة (taskId)");
+  return data.taskId;
 }
 
-export interface KiePollState {
-  status: "processing" | "succeeded" | "failed";
-  resultUrl?: string;
-  error?: string;
+export interface KieTaskSnapshot {
+  state: string;
+  url?: string;
+  failMsg?: string;
+  progress?: number;
 }
 
-/** قراءة حالة مهمة واستخراج رابط الناتج عند الاكتمال */
-export async function kiePollTask(taskId: string): Promise<KiePollState> {
+/** استعلام حالة مهمة واستخراج أول رابط نتيجة إن وُجد */
+export async function kiePollTask(taskId: string): Promise<KieTaskSnapshot> {
   const res = await fetch(
-    `${KIE_API_BASE}/recordInfo?taskId=${encodeURIComponent(taskId)}`,
-    { headers: { Authorization: `Bearer ${kieApiKey()}` } }
+    `${KIE_BASE}/recordInfo?taskId=${encodeURIComponent(taskId)}`,
+    { headers: await kieHeaders() }
   );
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`kie.ai recordInfo (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(`kie.ai poll HTTP (${res.status}): ${text.slice(0, 300)}`);
   }
 
-  const json = (await res.json().catch(() => null)) as
-    | {
-        code?: number;
-        msg?: string;
-        data?: {
-          state?: string;
-          resultJson?: string;
-          failMsg?: string;
-          failCode?: string;
-        };
+  const json = (await res.json()) as KieResponse<KieRecordData>;
+  const data = requireOk(json);
+
+  let url: string | undefined;
+  if (data.resultJson) {
+    try {
+      const parsed = JSON.parse(data.resultJson) as { resultUrls?: unknown };
+      if (Array.isArray(parsed.resultUrls)) {
+        url = parsed.resultUrls.find(
+          (u): u is string => typeof u === "string" && u.length > 0
+        );
       }
-    | null;
-
-  if (!json || (json.code !== undefined && json.code !== 200)) {
-    throw new Error(`kie.ai recordInfo: ${json?.msg ?? "استجابة غير صالحة"}`);
+    } catch {
+      // resultJson ليس JSON صالحاً — تجاهل بهدوء
+    }
   }
 
-  const d = json.data ?? {};
-  const state = d.state ?? "";
-
-  if (state === "success") {
-    const url = extractResultUrl(d.resultJson);
-    if (!url) return { status: "failed", error: "اكتملت المهمة دون رابط ناتج صالح" };
-    return { status: "succeeded", resultUrl: url };
-  }
-
-  if (state === "fail") {
-    return {
-      status: "failed",
-      error: d.failMsg ?? `فشلت المهمة (${d.failCode ?? "بدون رمز خطأ"})`,
-    };
-  }
-
-  // waiting | queuing | generating — ما زالت قيد المعالجة
-  return { status: "processing" };
+  return {
+    state: data.state ?? "waiting",
+    url,
+    failMsg: data.failMsg || undefined,
+    progress: data.progress ?? undefined,
+  };
 }
 
-/** resultJson يصل غالباً كسلسلة JSON تحتوي resultUrl (نص أو مصفوفة) */
-function extractResultUrl(resultJson?: string): string | undefined {
-  if (!resultJson) return undefined;
-  try {
-    const parsed = JSON.parse(resultJson) as unknown;
-    if (typeof parsed === "string") {
-      return parsed.startsWith("http") ? parsed : undefined;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** انتظار اكتمال المهمة وإرجاع رابط النتيجة النهائي */
+export async function kieWaitForTask(
+  taskId: string,
+  timeoutMs = 240_000,
+  intervalMs = 3_000
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const snap = await kiePollTask(taskId);
+    if (snap.state === "success") {
+      if (!snap.url) {
+        throw new Error("kie.ai أرجع النجاح بدون رابط نتيجة (resultUrls)");
+      }
+      return snap.url;
     }
-    const obj = parsed as { resultUrl?: string | string[]; url?: string | string[] };
-    const pick = (v: string | string[] | undefined): string | undefined =>
-      Array.isArray(v)
-        ? v.find((u) => typeof u === "string" && u.length > 0)
-        : typeof v === "string" && v.length > 0
-          ? v
-          : undefined;
-    return pick(obj.resultUrl) ?? pick(obj.url);
-  } catch {
-    return resultJson.startsWith("http") ? resultJson : undefined;
+    if (snap.state === "fail") {
+      throw new Error(
+        `فشلت مهمة kie.ai: ${snap.failMsg ?? "بدون تفاصيل"}`
+      );
+    }
+    if (Date.now() + intervalMs >= deadline) {
+      throw new Error(
+        `انتهت مهلة انتظار مهمة kie.ai (${Math.round(timeoutMs / 1000)} ثانية) — الحالة الأخيرة: ${snap.state}`
+      );
+    }
+    await sleep(intervalMs);
   }
+}
+
+function guessMime(url: string, contentType?: string): string {
+  const clean = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (clean && clean !== "application/octet-stream") return clean;
+  if (/\.(jpe?g)(\?|$)/i.test(url)) return "image/jpeg";
+  if (/\.(webp)(\?|$)/i.test(url)) return "image/webp";
+  if (/\.(mp4)(\?|$)/i.test(url)) return "video/mp4";
+  if (/\.(webm)(\?|$)/i.test(url)) return "video/webm";
+  return "image/png";
 }
 
 /** تنزيل ملف ناتج من kie.ai مع حد أقصى للتخزين */
-export async function downloadKieMedia(url: string): Promise<Buffer> {
+export async function downloadKieMedia(
+  url: string
+): Promise<{ buffer: Buffer; mimeType: string }> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`فشل تنزيل الملف الناتج من kie.ai (${res.status})`);
+  if (!res.ok) throw new Error(`فشل تنزيل الناتج من kie.ai (${res.status})`);
 
   const contentLength = Number(res.headers.get("content-length") ?? 0);
   if (contentLength > MAX_STORE_BYTES) {
     throw new Error(
-      `حجم الملف (${Math.round(contentLength / 1024 / 1024)}MB) يتجاوز حد التخزين`
+      `حجم الملف (${Math.round(contentLength / 1024 / 1024)}MB) يتجاوز حد التخزين (${Math.round(MAX_STORE_BYTES / 1024 / 1024)}MB)`
     );
   }
 
   const arrayBuf = await res.arrayBuffer();
   if (arrayBuf.byteLength > MAX_STORE_BYTES) {
     throw new Error(
-      `حجم الملف (${Math.round(arrayBuf.byteLength / 1024 / 1024)}MB) يتجاوز حد التخزين`
+      `حجم الملف (${Math.round(arrayBuf.byteLength / 1024 / 1024)}MB) يتجاوز حد التخزين (${Math.round(MAX_STORE_BYTES / 1024 / 1024)}MB)`
     );
   }
 
-  return Buffer.from(arrayBuf);
-}
-
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return {
+    buffer: Buffer.from(arrayBuf),
+    mimeType: guessMime(url, res.headers.get("content-type") ?? undefined),
+  };
 }

@@ -1,5 +1,13 @@
-import { getImageModel, getImageProvider, getKieImageModel, IMAGE_SIZES, OPENAI_SIZE_MAP, type ImageSizeKey } from "../config";
-import { downloadKieMedia, kieCreateTask, kiePollTask, sleep } from "./kie";
+import {
+  getImageModel,
+  getImageProvider,
+  IMAGE_SIZES,
+  KIE_ASPECT_MAP,
+  OPENAI_SIZE_MAP,
+  getProviderExtraInput,
+  type ImageSizeKey,
+} from "../config";
+import { kieCreateTask, kieWaitForTask, downloadKieMedia } from "./kie";
 
 export interface ImageResult {
   buffer: Buffer;
@@ -10,75 +18,55 @@ export interface ImageResult {
 
 /**
  * توليد صورة سوريالية من وصف نصي.
- * - الإنتاج (KIE_API_KEY مضبوط): kie.ai — GPT Image 2.6 Flare
- * - بديل (OPENAI_API_KEY مضبوط): OpenAI Images API
- * - المعاينة/التطوير: z-ai-web-dev-sdk (يعمل بدون مفاتيح)
+ * - الإنتاج (KIE_API_KEY مضبوط): kie.ai — gpt-image-2-6/flare-text-to-image
+ * - بديل (OPENAI_API_KEY): OpenAI Images API
+ * - المعاينة/التطوير بدون مفاتيح: z-ai-web-dev-sdk
  */
 export async function generateImage(
   prompt: string,
   sizeKey: ImageSizeKey = "square"
 ): Promise<ImageResult> {
+  const provider = getImageProvider();
+
+  if (provider === "kie") return generateWithKie(prompt, sizeKey);
+  if (provider === "openai") return generateWithOpenAI(prompt, sizeKey);
+  return generateWithZai(prompt, sizeKey);
+}
+
+/** kie.ai — gpt-image-2-6/flare-text-to-image (مهام غير متزامنة ثم تنزيل الناتج) */
+async function generateWithKie(
+  prompt: string,
+  sizeKey: ImageSizeKey
+): Promise<ImageResult> {
+  const model = getImageModel();
+  const aspectRatio = KIE_ASPECT_MAP[sizeKey] ?? "1:1";
+
+  const input = {
+    prompt,
+    aspectRatio,
+    outputFormat: "png",
+    ...getProviderExtraInput("IMAGE_INPUT"),
+  };
+
+  const taskId = await kieCreateTask(model, input);
+  const url = await kieWaitForTask(taskId, 240_000, 3_000);
+  const media = await downloadKieMedia(url);
+
+  return {
+    buffer: media.buffer,
+    mimeType: media.mimeType,
+    provider: "kie",
+    model,
+  };
+}
+
+async function generateWithOpenAI(
+  prompt: string,
+  sizeKey: ImageSizeKey
+): Promise<ImageResult> {
   const size = IMAGE_SIZES[sizeKey] ?? IMAGE_SIZES.square;
+  const model = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1";
 
-  if (getImageProvider() === "kie") {
-    return generateWithKie(prompt, size);
-  }
-  if (getImageProvider() === "openai") {
-    return generateWithOpenAI(prompt, size);
-  }
-  return generateWithZai(prompt, size);
-}
-
-/** خريطة الأبعاد إلى نسب العرض لـ kie.ai */
-const KIE_ASPECT_MAP: Record<string, string> = {
-  "1024x1024": "1:1",
-  "768x1344": "9:16",
-  "1344x768": "16:9",
-  "1440x720": "21:9",
-};
-
-async function generateWithKie(prompt: string, size: string): Promise<ImageResult> {
-  const model = getKieImageModel();
-  // نسخة بديلة لاسم النموذج (شرطة/نقطة) في حال رفض المزوّد للاسم الأساسي
-  const altModel = model.includes("-2-6/")
-    ? model.replace(/-2-6\//, "-2.6/")
-    : model.includes("-2.6/")
-      ? model.replace(/-2\.6\//, "-2-6/")
-      : null;
-
-  let taskId: string;
-  try {
-    taskId = await kieCreateTask(model, {
-      prompt,
-      aspect_ratio: KIE_ASPECT_MAP[size] ?? "1:1",
-      resolution: "1K",
-    });
-  } catch (err) {
-    if (!altModel) throw err;
-    taskId = await kieCreateTask(altModel, {
-      prompt,
-      aspect_ratio: KIE_ASPECT_MAP[size] ?? "1:1",
-      resolution: "1K",
-    });
-  }
-
-  const deadline = Date.now() + 240_000;
-  while (Date.now() < deadline) {
-    const state = await kiePollTask(taskId);
-    if (state.status === "succeeded" && state.resultUrl) {
-      const buffer = await downloadKieMedia(state.resultUrl);
-      const mime = /\.(webp)(\?|$)/i.test(state.resultUrl) ? "image/webp" : "image/png";
-      return { buffer, mimeType: mime, provider: "kie", model };
-    }
-    if (state.status === "failed") {
-      throw new Error(state.error ?? "فشل توليد الصورة عبر kie.ai");
-    }
-    await sleep(6000);
-  }
-  throw new Error("انتهت مهلة توليد الصورة عبر kie.ai (4 دقائق)");
-}
-
-async function generateWithOpenAI(prompt: string, size: string): Promise<ImageResult> {
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: {
@@ -86,7 +74,7 @@ async function generateWithOpenAI(prompt: string, size: string): Promise<ImageRe
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: getImageModel(),
+      model,
       prompt,
       n: 1,
       size: OPENAI_SIZE_MAP[size] ?? "1024x1024",
@@ -106,11 +94,12 @@ async function generateWithOpenAI(prompt: string, size: string): Promise<ImageRe
     buffer: Buffer.from(b64, "base64"),
     mimeType: "image/png",
     provider: "openai",
-    model: getImageModel(),
+    model,
   };
 }
 
-async function generateWithZai(prompt: string, size: string): Promise<ImageResult> {
+async function generateWithZai(prompt: string, sizeKey: ImageSizeKey): Promise<ImageResult> {
+  const size = IMAGE_SIZES[sizeKey] ?? IMAGE_SIZES.square;
   const ZAI = (await import("z-ai-web-dev-sdk")).default;
   const zai = await ZAI.create();
 

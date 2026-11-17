@@ -23,6 +23,14 @@ export const OPENAI_SIZE_MAP: Record<string, string> = {
   "1440x720": "1536x1024",
 };
 
+/** مطابقة أبعاد الصور إلى نسب العرض في kie.ai */
+export const KIE_ASPECT_MAP: Record<ImageSizeKey, string> = {
+  square: "1:1",
+  portrait: "9:16",
+  landscape: "16:9",
+  wide: "16:9",
+};
+
 /** أولوية المزوّدين: kie.ai أولاً ثم OpenAI ثم المزوّد المدمج للمعاينة */
 export function getImageProvider(): ImageProvider {
   if (process.env.KIE_API_KEY) return "kie";
@@ -36,41 +44,48 @@ export function getVideoProvider(): VideoProvider | null {
   return null;
 }
 
-/** نموذج الصور عبر kie.ai (افتراضي: GPT Image 2.6 Flare) */
-export function getKieImageModel(): string {
-  return process.env.KIE_IMAGE_MODEL ?? "gpt-image-2-6/flare-text-to-image";
-}
-
-/** نموذج الفيديو عبر kie.ai (افتراضي: Grok Imagine Video 1.5 Preview) */
-export function getKieVideoModel(): string {
-  return process.env.KIE_VIDEO_MODEL ?? "grok-imagine-video-1-5-preview";
-}
-
+/** نموذج الصور (افتراضي: GPT Image 2.6 Flare عبر kie.ai) */
 export function getImageModel(): string {
-  return process.env.IMAGE_MODEL ?? "gpt-image-2.5-sunburst";
+  return (
+    process.env.IMAGE_MODEL ??
+    process.env.KIE_IMAGE_MODEL ??
+    "gpt-image-2-6/flare-text-to-image"
+  );
 }
 
+/** نموذج الفيديو (افتراضي: Grok Imagine Video 1.5 Preview عبر kie.ai) */
 export function getVideoModel(): string {
-  return process.env.VIDEO_MODEL ?? "alibaba/wan-3";
+  return (
+    process.env.VIDEO_MODEL ??
+    process.env.KIE_VIDEO_MODEL ??
+    "grok-imagine-video-1-5-preview"
+  );
 }
 
-/** مدخلات إضافية اختيارية لنموذج الفيديو (JSON في متغير البيئة VIDEO_INPUT) */
-export function getVideoExtraInput(): Record<string, unknown> {
-  if (!process.env.VIDEO_INPUT) return {};
+/** مدخلات إضافية اختيارية للمزوّد (JSON في متغير بيئة، مثل IMAGE_INPUT أو VIDEO_INPUT) */
+export function getProviderExtraInput(envName: string): Record<string, unknown> {
+  const raw = process.env[envName];
+  if (!raw) return {};
   try {
-    const parsed = JSON.parse(process.env.VIDEO_INPUT);
+    const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null ? parsed : {};
   } catch {
     return {};
   }
 }
 
+/** مدخلات إضافية اختيارية لنموذج الفيديو (JSON في متغير البيئة VIDEO_INPUT) */
+export function getVideoExtraInput(): Record<string, unknown> {
+  return getProviderExtraInput("VIDEO_INPUT");
+}
+
 export function getFeatureFlags() {
   return {
     imageProvider: getImageProvider(),
-    imageModel: getImageProvider() === "kie" ? getKieImageModel() : getImageModel(),
+    imageModel: getImageModel(),
     videoProvider: getVideoProvider(),
-    videoModel: process.env.KIE_API_KEY ? getKieVideoModel() : getVideoModel(),
+    videoModel: getVideoModel(),
+    kie: Boolean(process.env.KIE_API_KEY),
     metricool: Boolean(
       process.env.METRICOOL_USER_TOKEN &&
         process.env.METRICOOL_USER_ID &&

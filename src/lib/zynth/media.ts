@@ -80,7 +80,7 @@ export async function completeMedia(
   return db.media.update({
     where: { id },
     data: {
-      data: data.buffer,
+      data: new Uint8Array(data.buffer),
       mimeType: data.mimeType,
       size: data.buffer.length,
       status: "completed",

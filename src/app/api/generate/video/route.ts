@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   const row = await createMedia({
     type: "video",
     prompt,
-    provider: getVideoProvider() ?? "replicate",
+    provider: getVideoProvider() ?? "none",
   });
 
   try {
