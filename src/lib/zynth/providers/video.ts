@@ -1,4 +1,5 @@
-import { getVideoExtraInput, getVideoModel, MAX_STORE_BYTES } from "../config";
+import { getKieVideoModel, getVideoExtraInput, getVideoModel, getVideoProvider, MAX_STORE_BYTES } from "../config";
+import { kieCreateTask, kiePollTask } from "./kie";
 
 export type VideoJobStatus =
   | "starting"
@@ -19,17 +20,33 @@ export interface VideoJobState {
 }
 
 /**
- * توليد فيديو سوريالي عبر Replicate (نمط غير متزامن):
+ * توليد فيديو سوريالي (نمط غير متزامن):
+ * - kie.ai (KIE_API_KEY): grok-imagine-video-1-5-preview عبر Jobs API الموحد
+ * - Replicate (REPLICATE_API_TOKEN): بديل اختياري
  * 1) createVideoJob يبدأ المهمة ويعرّفها بـ jobId
  * 2) pollVideoJob يُستدعى لاحقاً لمعرفة الحالة وجلب الرابط النهائي
  */
 export async function createVideoJob(prompt: string): Promise<VideoJobHandle> {
-  const token = process.env.REPLICATE_API_TOKEN;
-  if (!token) {
+  const provider = getVideoProvider();
+
+  if (provider === "kie") {
+    const model = getKieVideoModel();
+    const extra = getVideoExtraInput();
+    const taskId = await kieCreateTask(model, {
+      prompt,
+      aspect_ratio: "9:16",
+      ...extra,
+    });
+    return { jobId: `kie:${taskId}`, model };
+  }
+
+  if (!provider) {
     throw new Error(
-      "توليد الفيديو يتطلب REPLICATE_API_TOKEN. أضفه في متغيرات البيئة (أو في Vercel) ثم أعد المحاولة."
+      "توليد الفيديو يتطلب KIE_API_KEY أو REPLICATE_API_TOKEN. أضف أحدهما في متغيرات البيئة ثم أعد المحاولة."
     );
   }
+
+  const token = process.env.REPLICATE_API_TOKEN;
 
   const model = getVideoModel();
   const res = await fetch(
@@ -59,6 +76,21 @@ export async function createVideoJob(prompt: string): Promise<VideoJobHandle> {
 }
 
 export async function pollVideoJob(jobId: string): Promise<VideoJobState> {
+  // مهام kie.ai — jobId بصيغة "kie:<taskId>"
+  if (jobId.startsWith("kie:")) {
+    const state = await kiePollTask(jobId.slice(4));
+    return {
+      status:
+        state.status === "succeeded"
+          ? "succeeded"
+          : state.status === "failed"
+            ? "failed"
+            : "processing",
+      outputUrl: state.resultUrl,
+      error: state.error,
+    };
+  }
+
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) throw new Error("REPLICATE_API_TOKEN مفقود");
 

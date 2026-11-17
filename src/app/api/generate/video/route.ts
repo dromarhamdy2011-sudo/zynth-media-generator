@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getBaseUrl, unauthorizedResponse, verifyApiAuth } from "@/lib/zynth/auth";
-import { getVideoModel } from "@/lib/zynth/config";
+import { getVideoProvider } from "@/lib/zynth/config";
 import { createMedia, failMedia, getMediaRow, serializeMedia } from "@/lib/zynth/media";
 import { createVideoJob } from "@/lib/zynth/providers/video";
 
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 
-/** POST /api/generate/video — بدء توليد فيديو سوريالي (مهمة غير متزامنة عبر Replicate) */
+/** POST /api/generate/video — بدء توليد فيديو سوريالي (مهمة غير متزامنة عبر kie.ai أو Replicate) */
 export async function POST(req: Request) {
   if (!verifyApiAuth(req)) return unauthorizedResponse();
 
@@ -28,7 +28,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "الوصف أطول من 2000 حرف" }, { status: 400 });
   }
 
-  const row = await createMedia({ type: "video", prompt, provider: "replicate" });
+  const row = await createMedia({
+    type: "video",
+    prompt,
+    provider: getVideoProvider() ?? "replicate",
+  });
 
   try {
     const job = await createVideoJob(prompt);

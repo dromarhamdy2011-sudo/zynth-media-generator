@@ -3,7 +3,8 @@
  * لا تكشف قيم المفاتيح أبداً، فقط ما إذا كانت مضبوطة.
  */
 
-export type ImageProvider = "openai" | "zai";
+export type ImageProvider = "kie" | "openai" | "zai";
+export type VideoProvider = "kie" | "replicate";
 
 export const IMAGE_SIZES = {
   square: "1024x1024",
@@ -22,8 +23,27 @@ export const OPENAI_SIZE_MAP: Record<string, string> = {
   "1440x720": "1536x1024",
 };
 
+/** أولوية المزوّدين: kie.ai أولاً ثم OpenAI ثم المزوّد المدمج للمعاينة */
 export function getImageProvider(): ImageProvider {
-  return process.env.OPENAI_API_KEY ? "openai" : "zai";
+  if (process.env.KIE_API_KEY) return "kie";
+  if (process.env.OPENAI_API_KEY) return "openai";
+  return "zai";
+}
+
+export function getVideoProvider(): VideoProvider | null {
+  if (process.env.KIE_API_KEY) return "kie";
+  if (process.env.REPLICATE_API_TOKEN) return "replicate";
+  return null;
+}
+
+/** نموذج الصور عبر kie.ai (افتراضي: GPT Image 2.6 Flare) */
+export function getKieImageModel(): string {
+  return process.env.KIE_IMAGE_MODEL ?? "gpt-image-2-6/flare-text-to-image";
+}
+
+/** نموذج الفيديو عبر kie.ai (افتراضي: Grok Imagine Video 1.5 Preview) */
+export function getKieVideoModel(): string {
+  return process.env.KIE_VIDEO_MODEL ?? "grok-imagine-video-1-5-preview";
 }
 
 export function getImageModel(): string {
@@ -48,9 +68,9 @@ export function getVideoExtraInput(): Record<string, unknown> {
 export function getFeatureFlags() {
   return {
     imageProvider: getImageProvider(),
-    imageModel: getImageModel(),
-    videoProvider: process.env.REPLICATE_API_TOKEN ? "replicate" : null,
-    videoModel: getVideoModel(),
+    imageModel: getImageProvider() === "kie" ? getKieImageModel() : getImageModel(),
+    videoProvider: getVideoProvider(),
+    videoModel: process.env.KIE_API_KEY ? getKieVideoModel() : getVideoModel(),
     metricool: Boolean(
       process.env.METRICOOL_USER_TOKEN &&
         process.env.METRICOOL_USER_ID &&

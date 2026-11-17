@@ -96,7 +96,7 @@ export function failMedia(id: string, error: string) {
   });
 }
 
-/** مزامنة مهمة فيديو جارية (Replicate) وتخزين الناتج عند الاكتمال */
+/** مزامنة مهمة فيديو جارية (kie.ai أو Replicate) وتخزين الناتج عند الاكتمال */
 export async function syncProcessingMedia(
   m: Media,
   baseUrl: string
@@ -110,7 +110,10 @@ export async function syncProcessingMedia(
     return { ...m, status: "failed", error: "انتهت مهلة المعالجة" };
   }
 
-  if (m.provider === "replicate" && m.providerJobId) {
+  if (
+    (m.provider === "replicate" || m.provider === "kie") &&
+    m.providerJobId
+  ) {
     const state = await pollVideoJob(m.providerJobId);
     if (state.status === "succeeded" && state.outputUrl) {
       try {
